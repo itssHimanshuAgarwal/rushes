@@ -92,7 +92,7 @@ export interface GeneratedClip extends ClipAnalysis {
 
 export async function generateShot(params: {
   prompt: string
-  mode: 'image' | 'video'
+  mode: 'image' | 'animate' | 'video'
   description?: string
   job_id?: string
 }): Promise<GeneratedClip> {

@@ -21,6 +21,15 @@ VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 VIDEO_DURATION_SECONDS = 5
 
+# Kling 2.1 Standard supports image-to-video at 720p — much cheaper and faster
+# than full text-to-video, and gives us tight control over the starting frame
+# (we generate the still first via FLUX-Schnell, locking in any continuity
+# correction before motion is added).
+ANIMATE_MODEL = "klingai:5@1"  # Kling 2.1 Standard, image-to-video, 720p
+ANIMATE_WIDTH = 1280
+ANIMATE_HEIGHT = 720
+ANIMATE_DURATION_SECONDS = 5
+
 
 def _auth_headers() -> dict:
     settings = get_settings()
@@ -134,6 +143,82 @@ async def text_to_video(
     raise RuntimeError(
         f"Runware video timed out after {int(timeout_seconds)}s. "
         f"Try image mode for a faster fallback."
+    )
+
+
+async def image_to_video(
+    image_url: str,
+    prompt: str,
+    on_progress: Callable[[int], Awaitable[None]] | None = None,
+    poll_interval: float = 5.0,
+    timeout_seconds: float = 240.0,
+) -> str:
+    """Animate a still image into a video clip via Kling 2.1 Standard.
+
+    Used for continuity fixes: we generate the corrected still via
+    FLUX-Schnell first (locks the wardrobe / environment), then hand that
+    image as the starting frame to Kling so the resulting video has real
+    motion that matches the prompt while preserving the corrected detail.
+
+    ~60-90s render time, vs ~100-120s for full text-to-video. 720p output.
+    """
+    task_uuid = str(uuid.uuid4())
+    submit_body = [
+        {
+            "taskType": "videoInference",
+            "taskUUID": task_uuid,
+            "positivePrompt": prompt,
+            "model": ANIMATE_MODEL,
+            "duration": ANIMATE_DURATION_SECONDS,
+            "width": ANIMATE_WIDTH,
+            "height": ANIMATE_HEIGHT,
+            "outputType": "URL",
+            "outputFormat": "MP4",
+            "numberResults": 1,
+            "frameImages": [{"inputImage": image_url}],
+        }
+    ]
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        sub = await client.post(RUNWARE_URL, headers=_auth_headers(), json=submit_body)
+    if sub.status_code != 200:
+        raise RuntimeError(f"Runware animate submit HTTP {sub.status_code}: {sub.text[:400]}")
+    sub_json = sub.json()
+    if sub_json.get("errors"):
+        raise RuntimeError(
+            f"Runware animate submit error: {sub_json['errors'][0].get('message', sub_json)}"
+        )
+
+    deadline = asyncio.get_event_loop().time() + timeout_seconds
+    elapsed = 0
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(poll_interval)
+        elapsed += int(poll_interval)
+        if on_progress:
+            try:
+                await on_progress(elapsed)
+            except Exception:
+                pass
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            poll = await client.post(
+                RUNWARE_URL,
+                headers=_auth_headers(),
+                json=[{"taskType": "getResponse", "taskUUID": task_uuid}],
+            )
+        if poll.status_code != 200:
+            continue
+        body = poll.json()
+        for item in body.get("data", []) or []:
+            status = item.get("status")
+            video_url = item.get("videoURL")
+            if status == "success" and video_url:
+                return video_url
+            if status in ("failed", "error"):
+                raise RuntimeError(
+                    f"Runware animate task failed: {item.get('error', item)}"
+                )
+    raise RuntimeError(
+        f"Runware image-to-video timed out after {int(timeout_seconds)}s. "
+        f"Try Full mode for a longer-but-more-reliable render."
     )
 
 

@@ -13,7 +13,12 @@ from app.services.ffmpeg_ops import (
     get_video_metadata,
     render_ken_burns_clip,
 )
-from app.services.runware import download, text_to_image, text_to_video
+from app.services.runware import (
+    download,
+    image_to_video,
+    text_to_image,
+    text_to_video,
+)
 
 router = APIRouter(tags=["generate-shot"])
 
@@ -24,8 +29,11 @@ PROCESSED_DIR = BASE_DIR / "processed"
 
 class GenerateShotRequest(BaseModel):
     prompt: str
-    mode: Literal["image", "video"] = "image"
-    description: str | None = None  # optional human label for the missing shot
+    # image    = FLUX-Schnell still + ffmpeg Ken Burns (8s, ~5s render, fake motion)
+    # animate  = FLUX-Schnell still + Kling 2.1 Standard image-to-video (5s, ~60-90s, REAL motion)
+    # video    = Kling 2.5 text-to-video (5s, ~100-120s, real motion, 1080p)
+    mode: Literal["image", "animate", "video"] = "image"
+    description: str | None = None
     job_id: str | None = None
 
 
@@ -69,6 +77,35 @@ async def generate_shot(req: GenerateShotRequest) -> dict:
             await publish(
                 job, {"type": "shot_progress", "stage": "render", "status": "completed"}
             )
+
+        elif req.mode == "animate":
+            # Hybrid: FLUX-Schnell still → Kling 2.1 Standard image-to-video.
+            # The still locks in the corrected detail (wardrobe, environment),
+            # then Kling adds real motion. Faster than full text-to-video and
+            # gives tighter creative control because we own the first frame.
+            await publish(
+                job,
+                {"type": "shot_progress", "stage": "image", "status": "running", "mode": "animate"},
+            )
+            image_url = await text_to_image(req.prompt)
+            await publish(
+                job, {"type": "shot_progress", "stage": "image", "status": "completed"}
+            )
+
+            async def on_progress(elapsed: int):
+                await publish(
+                    job,
+                    {"type": "shot_progress", "stage": "render", "status": "running", "elapsed": elapsed},
+                )
+
+            video_url = await image_to_video(image_url, req.prompt, on_progress=on_progress)
+            await publish(
+                job, {"type": "shot_progress", "stage": "render", "status": "completed"}
+            )
+
+            video_bytes = await download(video_url)
+            async with aiofiles.open(saved_path, "wb") as f:
+                await f.write(video_bytes)
 
         elif req.mode == "video":
             await publish(
@@ -124,11 +161,13 @@ async def generate_shot(req: GenerateShotRequest) -> dict:
         "objects": [],
         "sounds_needed": [],
         "ambient_type": "indoor-room",
-        "quality_score": 80 if req.mode == "video" else 70,
+        "quality_score": (
+            85 if req.mode == "video" else 80 if req.mode == "animate" else 70
+        ),
         "quality_issues": (
-            []
-            if req.mode == "video"
-            else ["still-image based — synthetic motion only"]
+            ["still-image based — synthetic motion only"]
+            if req.mode == "image"
+            else []
         ),
         "color_palette": "matched to prompt",
         "thumbnail_url": f"/processed/{os.path.basename(thumb_path)}",

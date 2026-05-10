@@ -50,7 +50,7 @@ interface Props {
   >
   onRegenerateContinuity?: (
     breakItem: ContinuityBreak,
-    mode: 'image' | 'video',
+    mode: 'image' | 'animate' | 'video',
   ) => Promise<void> | void
   continuityFixStatus?: Record<
     string,

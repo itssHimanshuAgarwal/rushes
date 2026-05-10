@@ -18,7 +18,7 @@ interface Props {
   index: number
   onRegenerate?: (
     breakItem: ContinuityBreak,
-    mode: 'image' | 'video',
+    mode: 'image' | 'animate' | 'video',
   ) => Promise<void> | void
   regenerationStatus?: 'idle' | 'running' | 'done' | 'error'
   regenerationMessage?: string
@@ -44,7 +44,9 @@ export default function ContinuityWarning({
   const labelB = clipB ? clipB.filename : `Clip ${break_.clip_b + 1}`
 
   const [copied, setCopied] = useState(false)
-  const [mode, setMode] = useState<'image' | 'video'>('image')
+  // Default to "animate" for continuity fixes — most clips have real motion
+  // (walking, gestures) and a still image with Ken Burns can't reproduce that.
+  const [mode, setMode] = useState<'animate' | 'video'>('animate')
 
   const hasFix = Boolean(break_.corrected_prompt && break_.fix_clip_id)
 
@@ -129,25 +131,28 @@ export default function ContinuityWarning({
               {/* Regenerate controls */}
               {onRegenerate && (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {/* Mode toggle */}
+                  {/* Mode toggle: Animate (image-to-video, real motion) vs
+                      Full (text-to-video, real motion at 1080p). Static Ken
+                      Burns is intentionally NOT offered here — continuity
+                      fixes need motion to read as a fix, not a freeze frame. */}
                   <div
                     className="inline-flex overflow-hidden rounded-md border border-rush-border"
                     style={{ background: '#0F0F18' }}
                   >
                     <button
                       type="button"
-                      onClick={() => setMode('image')}
+                      onClick={() => setMode('animate')}
                       disabled={isRunning || isDone}
                       className={[
                         'flex items-center gap-1 px-2.5 py-1 font-display text-[10px] font-medium uppercase tracking-wider transition-colors',
-                        mode === 'image'
+                        mode === 'animate'
                           ? 'bg-rush-accent-gold/20 text-rush-accent-gold'
                           : 'text-rush-text-secondary hover:text-rush-text-primary',
                       ].join(' ')}
-                      title="Regenerate as 8s Ken Burns clip from a still image (~5s render)"
+                      title="FLUX-Schnell still + Kling 2.1 Standard image-to-video. Real motion locked to a corrected first frame. ~60-90s render."
                     >
                       <ImageIcon size={10} />
-                      Quick · 8s
+                      Animate · ~1 min
                     </button>
                     <button
                       type="button"
@@ -159,7 +164,7 @@ export default function ContinuityWarning({
                           ? 'bg-rush-accent-gold/20 text-rush-accent-gold'
                           : 'text-rush-text-secondary hover:text-rush-text-primary',
                       ].join(' ')}
-                      title="Regenerate as full Kling 2.5 video (~90-120s)"
+                      title="Full Kling 2.5 text-to-video at 1080p. ~90-120s render."
                     >
                       <Video size={10} />
                       Full · ~2 min

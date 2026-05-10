@@ -312,17 +312,20 @@ function App() {
   // we replace the offending clip in state, preserving its position in the
   // suggested order and removing the resolved continuity break.
   const handleRegenerateContinuity = useCallback(
-    async (b: ContinuityBreak, mode: 'image' | 'video') => {
+    async (b: ContinuityBreak, mode: 'image' | 'animate' | 'video') => {
       if (!b.corrected_prompt || !b.fix_clip_id) return
       const key = `${b.clip_a}-${b.clip_b}-${b.issue.slice(0, 32)}`
+      const messageByMode: Record<typeof mode, string> = {
+        animate:
+          'FLUX still → Kling 2.1 Standard image-to-video — ~60-90s',
+        video: 'Submitting to Runware (Kling 2.5) — ~90-120s',
+        image: 'Generating image + Ken Burns — ~8s',
+      }
       setContinuityFixStatus((prev) => ({
         ...prev,
         [key]: {
           status: 'running',
-          message:
-            mode === 'video'
-              ? 'Submitting to Runware (Kling 2.5) — ~90-120s'
-              : 'Generating image + Ken Burns — ~8s',
+          message: messageByMode[mode],
         },
       }))
       try {
