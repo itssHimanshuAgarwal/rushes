@@ -80,6 +80,13 @@ function App() {
   const [continuityFixStatus, setContinuityFixStatus] = useState<
     Record<string, { status: 'running' | 'done' | 'error'; message?: string }>
   >({})
+  // Set during a silent background re-assembly that fires when a clip is
+  // added, replaced, or removed AFTER the initial Make Coherent has run.
+  // Without this, the assembledVideoUrl points at a stale film and the
+  // Play/Export buttons play the old version.
+  const [reassembling, setReassembling] = useState<
+    null | 'assembling' | 'critiquing'
+  >(null)
   const [critiqueStatus, setCritiqueStatus] = useState<
     'idle' | 'running' | 'done' | 'error'
   >('idle')
@@ -219,9 +226,57 @@ function App() {
     [armSlowHint, clearSlowHint],
   )
 
+  // Silent re-assembly: when clips change AFTER initial Make Coherent
+  // (a generated shot is added, a continuity fix replaces a clip), the
+  // assembled film is now stale. Re-run /api/assemble against the new
+  // clip list, then re-run the Critic so the Director's Score reflects
+  // the corrected film. Runs in the background; the existing Play button
+  // shows the old version until the new one lands.
+  const triggerReassembly = useCallback(
+    async (
+      clips: ClipAnalysis[],
+      suggestedOrder: string[],
+      musicUrl: string | null,
+    ) => {
+      if (demoMode) return // demo state already has /demo_film.mp4
+      const orderedIds = suggestedOrder.length
+        ? suggestedOrder.filter((id) => clips.some((c) => c.clip_id === id))
+        : clips.map((c) => c.clip_id)
+      if (orderedIds.length === 0) return
+      try {
+        setReassembling('assembling')
+        const fresh = await assembleClips({
+          clip_ids: orderedIds,
+          music_url: musicUrl ?? undefined,
+          crossfade_seconds: 0.5, // ignored by ffmpeg_ops; kept for API parity
+        })
+        setState((s) => ({ ...s, assembledVideoUrl: fresh.output_url }))
+
+        // Re-run the Critic on the new film. Failures are non-fatal —
+        // the assembled video still updates even if the critique can't refresh.
+        setReassembling('critiquing')
+        try {
+          const c = await critiqueFilm({
+            output_url: fresh.output_url,
+            job_id: analyzeJobId ?? undefined,
+          })
+          setState((s) => ({ ...s, critique: c }))
+        } catch {
+          /* keep stale critique rather than blanking it */
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Re-assembly failed.'
+        setPipelineError(msg)
+      } finally {
+        setReassembling(null)
+      }
+    },
+    [demoMode, analyzeJobId],
+  )
+
   // Generate a missing shot via Runware → drop the new clip into the project.
   const handleGenerateShot = useCallback(
-    async (shot: MissingShot, mode: 'image' | 'video') => {
+    async (shot: MissingShot, mode: 'image' | 'animate' | 'video') => {
       const key = shot.suggested_prompt
       setShotGenStatus((prev) => ({
         ...prev,
@@ -278,15 +333,24 @@ function App() {
           description: shot.description,
           job_id: analyzeJobId ?? undefined,
         })
-        setState((s) => ({
-          ...s,
-          clips: [...s.clips, newClip],
-          // Append to the suggested order so it shows up in the timeline strip
-          suggestedOrder: [...s.suggestedOrder, newClip.clip_id],
-          missingShots: s.missingShots.filter(
-            (m) => m.suggested_prompt !== shot.suggested_prompt,
-          ),
-        }))
+        let nextClips: ClipAnalysis[] = []
+        let nextOrder: string[] = []
+        let nextMusic: string | null = null
+        let hadAssembled = false
+        setState((s) => {
+          nextClips = [...s.clips, newClip]
+          nextOrder = [...s.suggestedOrder, newClip.clip_id]
+          nextMusic = s.musicUrl
+          hadAssembled = Boolean(s.assembledVideoUrl)
+          return {
+            ...s,
+            clips: nextClips,
+            suggestedOrder: nextOrder,
+            missingShots: s.missingShots.filter(
+              (m) => m.suggested_prompt !== shot.suggested_prompt,
+            ),
+          }
+        })
         setShotGenStatus((prev) => ({
           ...prev,
           [key]: {
@@ -294,6 +358,10 @@ function App() {
             message: `+1 clip · ${newClip.duration.toFixed(1)}s`,
           },
         }))
+        if (hadAssembled) {
+          // Fire and forget — don't block the Generate button on re-assembly
+          void triggerReassembly(nextClips, nextOrder, nextMusic)
+        }
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : 'Generation failed.'
@@ -303,7 +371,7 @@ function App() {
         }))
       }
     },
-    [demoMode, analyzeJobId],
+    [demoMode, analyzeJobId, triggerReassembly],
   )
 
   // CONTINUITY REGENERATION: when the Critic flags a visual break, the user
@@ -374,21 +442,31 @@ function App() {
         // the resolved continuity break — but keep audioReadyFor membership
         // shifted to the new clip_id so the dual-score Polish doesn't drop.
         const fixId = b.fix_clip_id
+        let nextClips: ClipAnalysis[] = []
+        let nextOrder: string[] = []
+        let nextMusic: string | null = null
+        let hadAssembled = false
         setState((s) => {
+          hadAssembled = Boolean(s.assembledVideoUrl)
+          nextMusic = s.musicUrl
           const idx = s.clips.findIndex((c) => c.clip_id === fixId)
           if (idx === -1) {
+            nextClips = [...s.clips, newClip]
+            nextOrder = [...s.suggestedOrder, newClip.clip_id]
             return {
               ...s,
-              clips: [...s.clips, newClip],
-              suggestedOrder: [...s.suggestedOrder, newClip.clip_id],
+              clips: nextClips,
+              suggestedOrder: nextOrder,
             }
           }
+          nextClips = s.clips.map((c, i) => (i === idx ? newClip : c))
+          nextOrder = s.suggestedOrder.map((id) =>
+            id === fixId ? newClip.clip_id : id,
+          )
           return {
             ...s,
-            clips: s.clips.map((c, i) => (i === idx ? newClip : c)),
-            suggestedOrder: s.suggestedOrder.map((id) =>
-              id === fixId ? newClip.clip_id : id,
-            ),
+            clips: nextClips,
+            suggestedOrder: nextOrder,
             continuityBreaks: s.continuityBreaks.filter(
               (br) =>
                 !(
@@ -414,6 +492,9 @@ function App() {
             message: `replaced · ${newClip.duration.toFixed(1)}s`,
           },
         }))
+        if (hadAssembled) {
+          void triggerReassembly(nextClips, nextOrder, nextMusic)
+        }
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : 'Regeneration failed.'
@@ -423,7 +504,7 @@ function App() {
         }))
       }
     },
-    [demoMode, state.clips, analyzeJobId],
+    [demoMode, state.clips, analyzeJobId, triggerReassembly],
   )
 
   // FEEDBACK LOOP: Critic suggests a fix → user clicks "Fix This" → we re-run
@@ -882,6 +963,32 @@ function App() {
                 </button>
               </div>
             </header>
+
+            {reassembling && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="flex flex-shrink-0 items-center gap-2 border-b border-rush-accent-gold/30 px-6 py-2 font-body text-[12px]"
+                style={{ background: 'rgba(232, 197, 71, 0.08)' }}
+              >
+                <span
+                  className="inline-block h-2 w-2 rounded-full bg-rush-accent-gold"
+                  style={{
+                    animation: 'pulse 1.4s ease-in-out infinite',
+                    boxShadow: '0 0 8px rgba(232,197,71,0.6)',
+                  }}
+                />
+                <span className="text-rush-accent-gold">
+                  {reassembling === 'assembling'
+                    ? 'Re-assembling your film with the updated clip…'
+                    : 'Re-running the Critic on the new film…'}
+                </span>
+                <span className="font-mono text-[10px] text-rush-text-secondary">
+                  Play and Export will update when ready
+                </span>
+              </motion.div>
+            )}
 
             <div className="flex flex-1 overflow-hidden">
               <ClipGallery

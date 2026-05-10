@@ -112,6 +112,16 @@ export default function ContinuityWarning({
                     </span>
                   )}
                 </div>
+                {clipB && clipB.duration > 8 && (
+                  <div
+                    className="mb-2 rounded-md border border-rush-accent-gold/30 px-2 py-1.5 font-mono text-[10px] leading-snug text-rush-accent-gold"
+                    style={{ background: 'rgba(232,197,71,0.06)' }}
+                  >
+                    ⚠ Original is {clipB.duration.toFixed(1)}s; AI regen caps
+                    at 5s. Your film will lose ~
+                    {(clipB.duration - 5).toFixed(0)}s of this clip's runtime.
+                  </div>
+                )}
                 <div
                   className="relative rounded-md p-2 pr-10 font-mono text-[12px] leading-snug text-rush-accent-gold"
                   style={{ background: '#1A1A2E' }}
