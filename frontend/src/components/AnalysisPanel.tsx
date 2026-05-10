@@ -48,6 +48,14 @@ interface Props {
     string,
     { status: 'running' | 'done' | 'error'; message?: string }
   >
+  onRegenerateContinuity?: (
+    breakItem: ContinuityBreak,
+    mode: 'image' | 'video',
+  ) => Promise<void> | void
+  continuityFixStatus?: Record<
+    string,
+    { status: 'running' | 'done' | 'error'; message?: string }
+  >
   critique: Critique | null
   critiqueStatus: 'idle' | 'running' | 'done' | 'error'
   critiqueError?: string | null
@@ -172,6 +180,8 @@ function OverviewMode({
   assembledReady,
   onGenerateShot,
   shotGenStatus,
+  onRegenerateContinuity,
+  continuityFixStatus,
   critique,
   critiqueStatus,
   critiqueError,
@@ -414,15 +424,22 @@ function OverviewMode({
           </div>
         ) : (
           <div className="space-y-2.5">
-            {continuityBreaks.map((b, i) => (
-              <ContinuityWarning
-                key={i}
-                index={i}
-                break_={b}
-                clipA={clips[b.clip_a]}
-                clipB={clips[b.clip_b]}
-              />
-            ))}
+            {continuityBreaks.map((b, i) => {
+              const key = `${b.clip_a}-${b.clip_b}-${b.issue.slice(0, 32)}`
+              const cs = continuityFixStatus?.[key]
+              return (
+                <ContinuityWarning
+                  key={i}
+                  index={i}
+                  break_={b}
+                  clipA={clips[b.clip_a]}
+                  clipB={clips[b.clip_b]}
+                  onRegenerate={onRegenerateContinuity}
+                  regenerationStatus={cs?.status ?? 'idle'}
+                  regenerationMessage={cs?.message}
+                />
+              )
+            })}
           </div>
         )}
       </section>
@@ -785,6 +802,8 @@ export default function AnalysisPanel(props: Props) {
           assembledReady={props.assembledReady}
           onGenerateShot={props.onGenerateShot}
           shotGenStatus={props.shotGenStatus}
+          onRegenerateContinuity={props.onRegenerateContinuity}
+          continuityFixStatus={props.continuityFixStatus}
           critique={props.critique}
           critiqueStatus={props.critiqueStatus}
           critiqueError={props.critiqueError}

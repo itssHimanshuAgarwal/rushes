@@ -14,7 +14,7 @@ import {
   generateMusic,
   generateShot,
 } from './lib/api'
-import type { Improvement, MissingShot } from './lib/types'
+import type { ContinuityBreak, Improvement, MissingShot } from './lib/types'
 import {
   DEMO_ANALYSIS,
   DEMO_ASSEMBLED_VIDEO_URL,
@@ -77,6 +77,9 @@ function App() {
   const [shotGenStatus, setShotGenStatus] = useState<
     Record<string, { status: 'running' | 'done' | 'error'; message?: string }>
   >({})
+  const [continuityFixStatus, setContinuityFixStatus] = useState<
+    Record<string, { status: 'running' | 'done' | 'error'; message?: string }>
+  >({})
   const [critiqueStatus, setCritiqueStatus] = useState<
     'idle' | 'running' | 'done' | 'error'
   >('idle')
@@ -132,6 +135,7 @@ function App() {
     setFixingKey(null)
     setFixedKeys(new Set())
     setFixingAgent(null)
+    setContinuityFixStatus({})
   }, [])
 
   useEffect(() => {
@@ -302,6 +306,123 @@ function App() {
     [demoMode, analyzeJobId],
   )
 
+  // CONTINUITY REGENERATION: when the Critic flags a visual break, the user
+  // can click "Regenerate with Runware" to actually fix it (vs just being
+  // told it exists). Runware generates a NEW clip from the corrected_prompt;
+  // we replace the offending clip in state, preserving its position in the
+  // suggested order and removing the resolved continuity break.
+  const handleRegenerateContinuity = useCallback(
+    async (b: ContinuityBreak, mode: 'image' | 'video') => {
+      if (!b.corrected_prompt || !b.fix_clip_id) return
+      const key = `${b.clip_a}-${b.clip_b}-${b.issue.slice(0, 32)}`
+      setContinuityFixStatus((prev) => ({
+        ...prev,
+        [key]: {
+          status: 'running',
+          message:
+            mode === 'video'
+              ? 'Submitting to Runware (Kling 2.5) — ~90-120s'
+              : 'Generating image + Ken Burns — ~8s',
+        },
+      }))
+      try {
+        let newClip
+        if (demoMode) {
+          await wait(mode === 'video' ? 4000 : 2000)
+          // Synthesize a fake replacement clip for demo mode
+          const oldClip = state.clips.find(
+            (c) => c.clip_id === b.fix_clip_id,
+          )
+          newClip = {
+            clip_id: `regen_${Math.random().toString(36).slice(2, 10)}`,
+            filename: oldClip
+              ? oldClip.filename.replace(/\.mp4$/i, '_FIXED.mp4')
+              : 'REGENERATED_v1.mp4',
+            duration: oldClip?.duration ?? 5.0,
+            resolution: mode === 'video' ? '1920x1080' : '1280x720',
+            has_audio: true,
+            scene_description: oldClip
+              ? `${oldClip.scene_description} (continuity-corrected to match anchor)`
+              : 'Continuity-corrected clip',
+            environment: oldClip?.environment ?? 'AI-generated',
+            lighting: oldClip?.lighting ?? 'matched',
+            mood: oldClip?.mood ?? 'matched',
+            characters: oldClip?.characters ?? [],
+            objects: oldClip?.objects ?? [],
+            sounds_needed: oldClip?.sounds_needed ?? [],
+            ambient_type: oldClip?.ambient_type ?? 'indoor-room',
+            quality_score: 80,
+            quality_issues: [],
+            color_palette: oldClip?.color_palette ?? 'matched',
+            thumbnail_url: oldClip?.thumbnail_url ?? '/demo_film.mp4',
+            video_url: '/demo_film.mp4',
+          }
+        } else {
+          newClip = await generateShot({
+            prompt: b.corrected_prompt,
+            mode,
+            description: `Continuity fix: ${b.issue.slice(0, 80)}`,
+            job_id: analyzeJobId ?? undefined,
+          })
+        }
+
+        // Swap the offending clip in place. Preserve its position in the
+        // gallery + suggestedOrder so the timeline doesn't reshuffle. Remove
+        // the resolved continuity break — but keep audioReadyFor membership
+        // shifted to the new clip_id so the dual-score Polish doesn't drop.
+        const fixId = b.fix_clip_id
+        setState((s) => {
+          const idx = s.clips.findIndex((c) => c.clip_id === fixId)
+          if (idx === -1) {
+            return {
+              ...s,
+              clips: [...s.clips, newClip],
+              suggestedOrder: [...s.suggestedOrder, newClip.clip_id],
+            }
+          }
+          return {
+            ...s,
+            clips: s.clips.map((c, i) => (i === idx ? newClip : c)),
+            suggestedOrder: s.suggestedOrder.map((id) =>
+              id === fixId ? newClip.clip_id : id,
+            ),
+            continuityBreaks: s.continuityBreaks.filter(
+              (br) =>
+                !(
+                  br.clip_a === b.clip_a &&
+                  br.clip_b === b.clip_b &&
+                  br.issue === b.issue
+                ),
+            ),
+          }
+        })
+        setAudioReadyFor((prev) => {
+          if (!prev.has(fixId)) return prev
+          const next = new Set(prev)
+          next.delete(fixId)
+          next.add(newClip.clip_id)
+          return next
+        })
+
+        setContinuityFixStatus((prev) => ({
+          ...prev,
+          [key]: {
+            status: 'done',
+            message: `replaced · ${newClip.duration.toFixed(1)}s`,
+          },
+        }))
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Regeneration failed.'
+        setContinuityFixStatus((prev) => ({
+          ...prev,
+          [key]: { status: 'error', message: msg },
+        }))
+      }
+    },
+    [demoMode, state.clips, analyzeJobId],
+  )
+
   // FEEDBACK LOOP: Critic suggests a fix → user clicks "Fix This" → we re-run
   // the targeted agent with the critic's new_instruction. The feedback edge in
   // the React Flow graph animates while this runs.
@@ -408,6 +529,7 @@ function App() {
     setFixingKey(null)
     setFixedKeys(new Set())
     setFixingAgent(null)
+    setContinuityFixStatus({})
   }
 
   const handleGenerateAudioForClip = useCallback(
@@ -782,6 +904,8 @@ function App() {
                   assembledReady={Boolean(state.assembledVideoUrl)}
                   onGenerateShot={handleGenerateShot}
                   shotGenStatus={shotGenStatus}
+                  onRegenerateContinuity={handleRegenerateContinuity}
+                  continuityFixStatus={continuityFixStatus}
                   critique={state.critique}
                   critiqueStatus={critiqueStatus}
                   critiqueError={critiqueError}

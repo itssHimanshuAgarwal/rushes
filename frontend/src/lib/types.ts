@@ -24,6 +24,12 @@ export interface ContinuityBreak {
   clip_b: number;
   issue: string;
   severity: 'high' | 'medium' | 'low';
+  // The Critic LLM proposes a concrete fix: which clip is the ground truth,
+  // which clip should be regenerated, and a ready-to-paste video-gen prompt
+  // that corrects the break while keeping the rest of the scene intact.
+  anchor_clip_id?: string;
+  fix_clip_id?: string;
+  corrected_prompt?: string;
 }
 
 export interface MissingShot {

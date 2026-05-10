@@ -192,6 +192,10 @@ const DEMO_BREAKS: ContinuityBreak[] = [
     severity: 'high',
     issue:
       "Wardrobe mismatch: the man wears a long black wool overcoat in NIGHT_STREET_WIDE but appears in a navy peacoat with a charcoal scarf in DOORWAY_MED. Same character, different outfit between adjacent shots.",
+    anchor_clip_id: 'demo_01',
+    fix_clip_id: 'demo_03',
+    corrected_prompt:
+      'A medium shot of the same man from the previous scene stepping through a backlit doorway. He wears a long black wool overcoat — exactly matching the wardrobe of the establishing wide shot. Warm amber light from the door behind him spills onto his face. Cool magenta neon spills in from the street outside. 35mm anamorphic, cinematic noir, slow handheld push-in.',
   },
 ]
 
