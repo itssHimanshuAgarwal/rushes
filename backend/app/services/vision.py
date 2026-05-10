@@ -8,11 +8,28 @@ import httpx
 from app.config import get_settings
 
 
-async def _post_openai_chat(payload: dict, max_retries: int = 2) -> dict:
-    """POST to OpenAI chat/completions with rate-limit-aware retry.
+GEMINI_MODEL = "gemini-2.5-flash-lite"  # vision-capable, free-tier friendly
 
-    Raises a runtime error with a human-readable message if non-200 after retries.
+
+async def _post_openai_chat(payload: dict, max_retries: int = 2) -> dict:
+    """Dispatcher: route to Gemini or OpenAI based on settings.LLM_PROVIDER.
+
+    Both branches return an OpenAI-shape envelope:
+        {"choices": [{"message": {"content": "..."}}]}
+
+    so callers (continuity.py, critic.py, the 3 vision agents) stay unchanged.
+    The function name kept as `_post_openai_chat` for backwards compat with
+    existing imports — it now dispatches to either provider.
     """
+    settings = get_settings()
+    provider = (settings.LLM_PROVIDER or "openai").lower()
+    if provider == "gemini":
+        return await _post_gemini(payload, max_retries=max_retries)
+    return await _post_openai_direct(payload, max_retries=max_retries)
+
+
+async def _post_openai_direct(payload: dict, max_retries: int = 2) -> dict:
+    """The original OpenAI client. Same body, retry, and error shape as before."""
     settings = get_settings()
     if not settings.OPENAI_API_KEY:
         raise RuntimeError(
@@ -64,12 +81,10 @@ async def _post_openai_chat(payload: dict, max_retries: int = 2) -> dict:
                 f"to lift the free-tier 3 RPM cap, or press ⌘D in the UI for demo mode."
             )
 
-        # 5xx — one retry with short backoff
         if resp.status_code >= 500 and attempt < max_retries:
             await asyncio.sleep(2.0 * (attempt + 1))
             continue
 
-        # Other non-200 — surface the message immediately
         try:
             msg = resp.json().get("error", {}).get("message", resp.text)
         except Exception:
@@ -78,6 +93,124 @@ async def _post_openai_chat(payload: dict, max_retries: int = 2) -> dict:
 
     raise RuntimeError(
         f"OpenAI request failed after {max_retries + 1} attempts "
+        f"(last status: {last_status}, body: {last_body[:200]})"
+    )
+
+
+def _openai_messages_to_gemini(messages: list[dict]) -> tuple[dict | None, list[dict]]:
+    """Convert OpenAI-format messages to Gemini's contents + systemInstruction.
+
+    Handles:
+    - {"role": "system", "content": "..."}  →  systemInstruction
+    - {"role": "user", "content": "..."}     →  contents.parts[0].text
+    - {"role": "user", "content": [{"type": "text"}, {"type": "image_url"}]}
+        →  parts: [{"text": ...}, {"inline_data": {"mime_type": "...", "data": base64}}]
+    """
+    system_msg = next((m for m in messages if m.get("role") == "system"), None)
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+
+    parts: list[dict] = []
+    for um in user_msgs:
+        content = um.get("content")
+        if isinstance(content, str):
+            parts.append({"text": content})
+            continue
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            t = item.get("type")
+            if t == "text":
+                parts.append({"text": item.get("text", "")})
+            elif t == "image_url":
+                url = item.get("image_url", {}).get("url", "")
+                if url.startswith("data:"):
+                    # data:image/jpeg;base64,/9j/4...
+                    header, _, b64 = url.partition(",")
+                    mime = "image/jpeg"
+                    if ";" in header:
+                        mime = header.split(":", 1)[-1].split(";", 1)[0]
+                    parts.append(
+                        {"inline_data": {"mime_type": mime, "data": b64}}
+                    )
+
+    sys_instruction = (
+        {"parts": [{"text": system_msg["content"]}]} if system_msg else None
+    )
+    return sys_instruction, parts
+
+
+async def _post_gemini(payload: dict, max_retries: int = 2) -> dict:
+    """POST to Gemini's generateContent with OpenAI→Gemini conversion + normalize."""
+    settings = get_settings()
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set but LLM_PROVIDER=gemini. "
+            "Add it to backend/.env and restart uvicorn."
+        )
+
+    sys_instruction, parts = _openai_messages_to_gemini(payload.get("messages", []))
+    body: dict = {
+        "contents": [{"role": "user", "parts": parts or [{"text": ""}]}],
+        "generationConfig": {
+            "temperature": payload.get("temperature", 0.3),
+            "maxOutputTokens": payload.get("max_tokens", 1000),
+            # Gemini natively supports forcing JSON output — more reliable
+            # than "Return ONLY JSON" prose in the system prompt.
+            "responseMimeType": "application/json",
+        },
+    }
+    if sys_instruction:
+        body["systemInstruction"] = sys_instruction
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+    )
+
+    last_status = None
+    last_body = ""
+    for attempt in range(max_retries + 1):
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "x-goog-api-key": settings.GEMINI_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            try:
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError, TypeError) as e:
+                raise RuntimeError(
+                    f"Gemini returned an unexpected response shape: {data}"
+                ) from e
+            # Normalize to OpenAI envelope so callers don't change.
+            return {"choices": [{"message": {"content": text}}]}
+
+        last_status = resp.status_code
+        last_body = resp.text
+
+        if resp.status_code == 429 and attempt < max_retries:
+            await asyncio.sleep(min(15.0 + attempt * 10, 30.0))
+            continue
+        if resp.status_code >= 500 and attempt < max_retries:
+            await asyncio.sleep(2.0 * (attempt + 1))
+            continue
+
+        try:
+            msg = resp.json().get("error", {}).get("message", resp.text)
+        except Exception:
+            msg = resp.text
+        raise RuntimeError(
+            f"Gemini returned HTTP {resp.status_code}: {msg}"
+        )
+
+    raise RuntimeError(
+        f"Gemini request failed after {max_retries + 1} attempts "
         f"(last status: {last_status}, body: {last_body[:200]})"
     )
 

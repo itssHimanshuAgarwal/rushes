@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     ELEVENLABS_API_KEY: Optional[str] = None
     RUNWARE_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+    # "openai" (default) or "gemini" — selects which LLM provider all
+    # vision-shaped calls (Quality / Scene / Sound / Continuity / Critic)
+    # route through. Both providers normalize to OpenAI's response shape.
+    LLM_PROVIDER: str = "openai"
 
 
 @lru_cache
