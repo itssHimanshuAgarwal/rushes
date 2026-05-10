@@ -74,6 +74,19 @@ function App() {
   const [slowHint, setSlowHint] = useState(false)
   const slowTimerRef = useRef<number | null>(null)
   const [analyzeJobId, setAnalyzeJobId] = useState<string | null>(null)
+  // null = unknown (still checking), true = reachable, false = not reachable.
+  // When deployed to a frontend-only host (Vercel) without the backend, this
+  // is false and we steer users toward the ⌘D demo instead of a cryptic
+  // network error when they drop files.
+  const [backendAvailable, setBackendAvailable] = useState<boolean | null>(null)
+  useEffect(() => {
+    const ctl = new AbortController()
+    const t = setTimeout(() => ctl.abort(), 3500)
+    fetch('/api/health', { signal: ctl.signal })
+      .then((r) => setBackendAvailable(r.ok))
+      .catch(() => setBackendAvailable(false))
+      .finally(() => clearTimeout(t))
+  }, [])
   const [shotGenStatus, setShotGenStatus] = useState<
     Record<string, { status: 'running' | 'done' | 'error'; message?: string }>
   >({})
@@ -168,6 +181,14 @@ function App() {
 
   const handleFiles = useCallback(
     async (files: File[]) => {
+      // Vercel-only deploy without backend — refuse the upload with a clear
+      // message instead of letting axios spit a generic network error.
+      if (backendAvailable === false) {
+        setErrorMessage(
+          'No backend is connected on this deployment. Press ⌘D to use the offline demo, or run the backend locally.',
+        )
+        return
+      }
       setErrorMessage(null)
       setPipelineError(null)
       setDemoMode(false)
@@ -223,7 +244,7 @@ function App() {
         setUploadProgress(0)
       }
     },
-    [armSlowHint, clearSlowHint],
+    [armSlowHint, clearSlowHint, backendAvailable],
   )
 
   // Silent re-assembly: when clips change AFTER initial Make Coherent
@@ -890,6 +911,7 @@ function App() {
               onLoadDemo={loadDemo}
               slowHint={slowHint && state.status === 'analyzing'}
               onRetry={handleReset}
+              backendAvailable={backendAvailable}
             />
           </motion.div>
         ) : showPipeline ? (

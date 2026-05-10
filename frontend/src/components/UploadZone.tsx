@@ -12,6 +12,11 @@ interface Props {
   onLoadDemo?: () => void
   slowHint?: boolean
   onRetry?: () => void
+  // null = unknown / still checking, true = reachable, false = not reachable.
+  // When false (e.g., Vercel deploy without backend), we surface a clear
+  // hint pointing the user to the ⌘D demo instead of a cryptic upload
+  // failure when they drop files.
+  backendAvailable?: boolean | null
 }
 
 // ---------- Floating particles ----------
@@ -170,6 +175,7 @@ export default function UploadZone({
   onLoadDemo,
   slowHint: _slowHint,
   onRetry: _onRetry,
+  backendAvailable,
 }: Props) {
   const [isDragOver, setIsDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -606,6 +612,50 @@ export default function UploadZone({
               )}
             </AnimatePresence>
           </motion.div>
+
+          {/* Backend-unreachable banner (Vercel-only deploy without Render/Railway).
+             Stays muted — informational, not alarming. ⌘D still works fully. */}
+          {backendAvailable === false && status === 'idle' && !errorMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1.4 }}
+              style={{
+                marginTop: 14,
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: '1px solid rgba(78, 205, 196, 0.3)',
+                background: 'rgba(78, 205, 196, 0.06)',
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: 13,
+                color: '#4ECDC4',
+                textAlign: 'left',
+              }}
+            >
+              This is the public demo build — no backend is connected here.
+              <div
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 11,
+                  color: '#8B8B9E',
+                  marginTop: 4,
+                }}
+              >
+                Press <kbd
+                  style={{
+                    border: '1px solid #2A2A3E',
+                    borderRadius: 3,
+                    padding: '0 4px',
+                    background: '#0F0F18',
+                    color: '#E8C547',
+                    fontFamily: "'JetBrains Mono', monospace",
+                  }}
+                >⌘D</kbd> to load the full mocked demo (5 clips, real Make
+                Coherent flow, Director's Review, Fix-This loop). For real
+                uploads, clone the repo and run the backend locally.
+              </div>
+            </motion.div>
+          )}
 
           {errorMessage && (
             <motion.div
