@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+
+# Secrets — DO NOT COMMIT
+.env
+.env.*
+!.env.example
+
+# Generated media
+backend/uploads/*
+backend/processed/*
+backend/output/*
+!backend/uploads/.gitkeep
+!backend/processed/.gitkeep
+!backend/output/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Misc
+*.log
