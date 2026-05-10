@@ -1,8 +1,6 @@
 # RUSHES
 
-**AI Post-Production Suite for AI Filmmakers.** Drop a folder of AI-generated clips. RUSHES analyzes every frame, scores quality, flags continuity breaks, generates sound design and music, and assembles the final film — all in about 30 seconds.
-
-> Built for **Big Screen Hack London 2026** · Builder Track.
+**AI Post-Production Suite for AI Filmmakers.** Drop a folder of AI-generated clips. RUSHES analyzes every frame, scores quality, flags continuity breaks, generates sound design and music, and assembles the final film all in about 30 seconds.
 
 ![RUSHES dashboard](docs/screenshot.png)
 
