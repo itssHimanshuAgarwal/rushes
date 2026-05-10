@@ -225,8 +225,8 @@ function App() {
           status: 'running',
           message:
             mode === 'video'
-              ? 'Submitting to Runware (Kling 2.1) — ~2-3 min'
-              : 'Generating image + Ken Burns — ~10s',
+              ? 'Submitting to Runware (Kling 2.5) — ~90-120s'
+              : 'Generating image + Ken Burns — ~8s',
         },
       }))
       try {

@@ -64,7 +64,7 @@ async def generate_shot(req: GenerateShotRequest) -> dict:
                 {"type": "shot_progress", "stage": "render", "status": "running"},
             )
             await render_ken_burns_clip(
-                str(still_path), str(saved_path), duration_seconds=4.0
+                str(still_path), str(saved_path), duration_seconds=8.0
             )
             await publish(
                 job, {"type": "shot_progress", "stage": "render", "status": "completed"}

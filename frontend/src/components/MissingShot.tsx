@@ -102,10 +102,10 @@ export default function MissingShot({
                       ? 'bg-rush-accent-gold/20 text-rush-accent-gold'
                       : 'text-rush-text-secondary hover:text-rush-text-primary',
                   ].join(' ')}
-                  title="Generate a 4-second clip from a still image (~5s, fast)"
+                  title="Generate an 8-second Ken Burns clip from a still image (~5s render)"
                 >
                   <ImageIcon size={10} />
-                  Quick · 5s
+                  Quick · 8s
                 </button>
                 <button
                   type="button"
@@ -117,10 +117,10 @@ export default function MissingShot({
                       ? 'bg-rush-accent-gold/20 text-rush-accent-gold'
                       : 'text-rush-text-secondary hover:text-rush-text-primary',
                   ].join(' ')}
-                  title="Full text-to-video via Runware (~2-3 min)"
+                  title="Real text-to-video via Runware Kling 2.5 (~90-120s render)"
                 >
                   <Video size={10} />
-                  Full Video · ~3 min
+                  Full Video · ~2 min
                 </button>
               </div>
 

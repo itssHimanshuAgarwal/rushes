@@ -16,7 +16,7 @@ IMAGE_WIDTH = 1024
 IMAGE_HEIGHT = 576  # 16:9
 IMAGE_MODEL = "runware:101@1"  # FLUX-Schnell, ~2-5s
 
-VIDEO_MODEL = "klingai:5@3"  # Kling 2.1 Master, ~2-3 min, 1920x1080
+VIDEO_MODEL = "klingai:6@1"  # Kling 2.5, ~100s for 5s video at 1080p (was Kling 2.1 Master ~165s)
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 VIDEO_DURATION_SECONDS = 5
