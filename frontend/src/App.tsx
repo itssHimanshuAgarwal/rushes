@@ -586,6 +586,21 @@ function App() {
     [demoMode, state.clips, state.suggestedOrder, state.musicUrl, audioReadyFor],
   )
 
+  // Manual drag-reorder of the timeline. If the project already has an
+  // assembled film, fire a silent re-assembly with the new clip order so
+  // Play and Export reflect the user's manual sequencing.
+  const handleReorderClips = useCallback(
+    (newOrder: string[]) => {
+      setState((s) => {
+        if (s.assembledVideoUrl) {
+          void triggerReassembly(s.clips, newOrder, s.musicUrl)
+        }
+        return { ...s, suggestedOrder: newOrder }
+      })
+    },
+    [triggerReassembly],
+  )
+
   const handleSelectClip = (clipId: string) => {
     setState((s) => ({
       ...s,
@@ -1028,6 +1043,7 @@ function App() {
                   suggestedOrder={state.suggestedOrder}
                   selectedClipId={state.selectedClipId}
                   onSelect={handleSelectClip}
+                  onReorder={handleReorderClips}
                   musicUrl={state.musicUrl}
                   musicMood={
                     demoMode ? DEMO_MUSIC_MOOD : dominantMood(state.clips)
