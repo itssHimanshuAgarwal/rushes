@@ -72,12 +72,15 @@ async def generate_audio_layers(
 
     generated_files: list[str] = []
 
+    # Limit to 2 SFX (was 3): a busier mix amplifies any single
+    # mis-synthesized sound. Two well-placed accents over the ambient bed
+    # reads as intentional sound design.
     sfx_tasks = [
         generate_sound_effect(
             description=sound_desc,
             duration_seconds=min(duration_seconds, 10.0),
         )
-        for sound_desc in sounds_needed[:3]
+        for sound_desc in sounds_needed[:2]
     ]
 
     sfx_results = await asyncio.gather(*sfx_tasks, return_exceptions=True)

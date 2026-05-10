@@ -136,10 +136,13 @@ async def mix_audio_layers(
 
     for i, audio_file in enumerate(audio_files):
         inputs.extend(["-i", audio_file])
+        # Quieter, more atmospheric mix. Was SFX 0.7 / ambient 0.25 — too
+        # aggressive when ElevenLabs misinterpreted a sound prompt. Now SFX
+        # 0.45 / ambient 0.18 so the bed sets tone and SFX accent gently.
         if "_ambient" in audio_file:
-            filter_parts.append(f"[{i}]volume=0.25[a{i}]")
+            filter_parts.append(f"[{i}]volume=0.18[a{i}]")
         else:
-            filter_parts.append(f"[{i}]volume=0.7[a{i}]")
+            filter_parts.append(f"[{i}]volume=0.45[a{i}]")
 
     mix_inputs = "".join(f"[a{i}]" for i in range(len(audio_files)))
     filter_complex = (
@@ -214,19 +217,25 @@ def _normalize_to_canonical(input_path: str, output_path: str) -> bool:
 
 
 async def assemble_clips(
-    clip_paths: list[str], output_path: str, crossfade: float = 0.5
+    clip_paths: list[str], output_path: str, crossfade: float = 0.0
 ) -> str:
-    """Assemble multiple clips into one video with crossfade transitions.
+    """Assemble clips into one video with hard cuts (filmmaker-standard).
 
-    Always normalizes every clip to 1280x720@30fps + aac 44.1kHz stereo first
-    so xfade/concat works regardless of source aspect ratio or framerate.
-    Raises RuntimeError if ffmpeg fails to produce a non-empty output.
+    Was using xfade for the 2-clip case which produced a 0.5–1s dark blend
+    when adjacent clips had dark intros/outros (AI clips often do). Now
+    every assembly uses the concat-demuxer regardless of clip count, with
+    a brief fade-in at the very start and fade-out at the very end of the
+    finished film for that "lights up / curtain falls" cinema feel.
+
+    The `crossfade` parameter is kept for API compatibility but ignored.
     """
+    del crossfade  # accepted for backwards compat, no longer used
+
     if len(clip_paths) == 1:
         shutil.copy2(clip_paths[0], output_path)
         return output_path
 
-    # Normalize every clip to a common format
+    # Normalize every clip to a common format so concat works cleanly
     normalized_clips: list[str] = []
     for i, clip in enumerate(clip_paths):
         norm_path = os.path.join(
@@ -239,68 +248,75 @@ async def assemble_clips(
             )
         normalized_clips.append(norm_path)
 
+    # Hard-cut concat (no crossfade artifacts, no dark blends)
+    concat_file = os.path.join(
+        os.path.dirname(output_path), "concat_list.txt"
+    )
+    with open(concat_file, "w") as f:
+        for clip in normalized_clips:
+            f.write(f"file '{os.path.abspath(clip)}'\n")
+
+    # Use re-encode (not -c copy) so the optional final fade-in/fade-out can
+    # be applied. Concat-demuxer + filter requires re-encoding anyway.
+    concat_raw = output_path + ".concat.mp4"
+    cmd_concat = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", concat_file,
+        "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        concat_raw,
+    ]
+    result = subprocess.run(cmd_concat, capture_output=True, text=True)
     try:
-        if len(normalized_clips) == 2:
-            # Two clips → real crossfade
-            duration1 = (await get_video_metadata(normalized_clips[0]))["duration"]
-            offset = max(0.0, duration1 - crossfade)
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", normalized_clips[0],
-                "-i", normalized_clips[1],
-                "-filter_complex",
-                f"[0:v][1:v]xfade=transition=fade:duration={crossfade}:offset={offset}[v];"
-                f"[0:a][1:a]acrossfade=d={crossfade}[a]",
-                "-map", "[v]", "-map", "[a]",
-                "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "192k",
-                output_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"2-clip xfade error:\n{result.stderr[-1500:]}")
-                raise RuntimeError(
-                    "ffmpeg crossfade failed even after normalization. "
-                    "Check the server log for the full ffmpeg error."
-                )
-        else:
-            # 3+ clips → concat demuxer (no crossfade between)
-            concat_file = os.path.join(
-                os.path.dirname(output_path), "concat_list.txt"
-            )
-            with open(concat_file, "w") as f:
-                for clip in normalized_clips:
-                    f.write(f"file '{os.path.abspath(clip)}'\n")
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", concat_file,
-                "-c", "copy",
-                output_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+        os.remove(concat_file)
+    except OSError:
+        pass
+    if result.returncode != 0:
+        print(f"concat error:\n{result.stderr[-1500:]}")
+        for clip in normalized_clips:
             try:
-                os.remove(concat_file)
+                os.remove(clip)
             except OSError:
                 pass
-            if result.returncode != 0:
-                print(f"concat error:\n{result.stderr[-1500:]}")
-                raise RuntimeError(
-                    "ffmpeg concat failed. Check the server log for the full error."
-                )
+        raise RuntimeError("ffmpeg concat failed. Check the server log.")
 
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise RuntimeError(
-                "ffmpeg reported success but produced an empty file. "
-                "Likely a codec mismatch — please report this clip combination."
-            )
-    finally:
-        for clip in normalized_clips:
-            if os.path.exists(clip):
-                try:
-                    os.remove(clip)
-                except OSError:
-                    pass
+    # Now apply gentle fade-in/fade-out for cinematic top + tail
+    total_meta = await get_video_metadata(concat_raw)
+    total_dur = total_meta["duration"]
+    fade_in_dur = 0.4
+    fade_out_dur = 0.6
+    fade_out_start = max(0.0, total_dur - fade_out_dur)
+
+    cmd_fade = [
+        "ffmpeg", "-y",
+        "-i", concat_raw,
+        "-vf",
+        f"fade=t=in:st=0:d={fade_in_dur},"
+        f"fade=t=out:st={fade_out_start}:d={fade_out_dur}",
+        "-af",
+        f"afade=t=in:st=0:d={fade_in_dur},"
+        f"afade=t=out:st={fade_out_start}:d={fade_out_dur}",
+        "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        output_path,
+    ]
+    result = subprocess.run(cmd_fade, capture_output=True, text=True)
+    try:
+        os.remove(concat_raw)
+    except OSError:
+        pass
+    for clip in normalized_clips:
+        try:
+            os.remove(clip)
+        except OSError:
+            pass
+    if result.returncode != 0:
+        print(f"fade error:\n{result.stderr[-1500:]}")
+        raise RuntimeError("ffmpeg fade pass failed. Check the server log.")
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError("ffmpeg produced an empty assembled file.")
 
     return output_path
 

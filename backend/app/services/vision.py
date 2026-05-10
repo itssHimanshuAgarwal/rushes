@@ -117,15 +117,27 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 Be specific. Return ONLY the JSON object."""
 
 
-SOUND_DESIGNER_PROMPT = """You are a film sound designer reviewing AI-generated video clips. You are looking at 3 keyframes from one clip.
+SOUND_DESIGNER_PROMPT = """You are a film sound designer reviewing 3 keyframes from one AI-generated video clip. Your job: identify the TWO most cinematically essential sounds for this clip — sounds the viewer would notice if they were missing.
 
-Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+Return ONLY valid JSON (no markdown, no code blocks):
 {
-    "sounds_needed": ["3-5 specific foley and ambient sounds a sound designer would add to this scene"],
+    "sounds_needed": [
+        "Two short, concrete foley/SFX descriptions — 5-10 words each, specific enough to render correctly via a text-to-sound API"
+    ],
     "ambient_type": "one of: forest, city-street, indoor-room, ocean-beach, mountain, desert, cave, space, underwater, restaurant, office"
 }
 
-Be SPECIFIC about sounds. Use concrete things like 'footsteps on wet asphalt', 'distant thunder rolling', 'fluorescent light hum', 'car door closing softly'. Avoid vague things like 'background music' or 'ambient sound'. Think about what a viewer would EXPECT to hear in this exact moment.
+Rules for sounds_needed:
+- Return EXACTLY TWO entries (not three, not five — TWO)
+- Each entry must be a single concrete sound event with a noun + qualifier:
+  - GOOD: "single car horn honking from middle distance"
+  - GOOD: "soft footsteps on wet asphalt, slow pace"
+  - GOOD: "glass clink as cup placed on saucer"
+  - BAD: "city sounds" (vague)
+  - BAD: "background music" (not foley)
+  - BAD: "ambient noise" (already covered by ambient_type)
+- Prefer DIEGETIC sounds — things visibly happening on screen — over generic atmosphere. The ambient bed handles atmosphere.
+- Avoid speech, dialogue, music, or anything copyrighted.
 
 Return ONLY the JSON object."""
 
