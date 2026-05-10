@@ -518,12 +518,19 @@ function App() {
       setFixingAgent(imp.agent_to_rerun)
       setPipelineError(null)
       try {
+        // Track the music URL through this fix — for music agent, it changes;
+        // for the others, it stays the same. We pass the latest value into
+        // triggerReassembly below so the final film picks up the change.
+        let nextMusicUrl = state.musicUrl
+
         if (demoMode) {
-          // Mock the rerun for the live demo
+          // Mock the per-agent work for the live demo
           await wait(2400)
         } else if (imp.agent_to_rerun === 'sound-design') {
           // Re-run audio generation on the first silent (or first overall) clip,
           // appending the critic's new_instruction as an extra sounds_needed entry.
+          // The new audio file replaces the old _with_audio.mp4 on disk; the
+          // re-assembly below will pick it up via /api/assemble's source resolver.
           const target =
             state.clips.find(
               (c) => !c.has_audio && !audioReadyFor.has(c.clip_id),
@@ -552,29 +559,26 @@ function App() {
                 ? 'subtle'
                 : 'moderate',
           })
-          setState((s) => ({ ...s, musicUrl: fresh.music_url ?? s.musicUrl }))
-        } else if (imp.agent_to_rerun === 'assembly') {
-          // Re-run assembly with possibly tighter crossfade
-          const orderedIds = state.suggestedOrder.length
-            ? state.suggestedOrder.filter((id) =>
-                state.clips.some((c) => c.clip_id === id),
-              )
-            : state.clips.map((c) => c.clip_id)
-          const tightenCrossfade = /tighten|faster|trim|shorter/i.test(
-            imp.new_instruction,
-          )
-          const fresh = await assembleClips({
-            clip_ids: orderedIds,
-            music_url: state.musicUrl ?? undefined,
-            crossfade_seconds: tightenCrossfade ? 0.3 : 0.5,
-          })
-          setState((s) => ({
-            ...s,
-            assembledVideoUrl: fresh.output_url,
-          }))
+          nextMusicUrl = fresh.music_url ?? state.musicUrl
+          setState((s) => ({ ...s, musicUrl: nextMusicUrl }))
         }
-        // Mark this improvement as fixed
+        // For 'assembly': agent-specific work IS the re-assembly, which
+        // triggerReassembly does below. No separate pass needed.
+
         setFixedKeys((prev) => new Set(prev).add(key))
+
+        // CRITICAL: re-run the final assembly so the timeline plays back the
+        // fix. Without this the per-agent changes (new audio file, new
+        // music_xxx.mp3) live on disk but never reach the assembled mp4.
+        // triggerReassembly also re-runs the Critic so the Director's Score
+        // reflects the corrected film.
+        if (state.assembledVideoUrl) {
+          await triggerReassembly(
+            state.clips,
+            state.suggestedOrder,
+            nextMusicUrl,
+          )
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Fix failed.'
         setPipelineError(msg)
@@ -583,7 +587,15 @@ function App() {
         setFixingAgent(null)
       }
     },
-    [demoMode, state.clips, state.suggestedOrder, state.musicUrl, audioReadyFor],
+    [
+      demoMode,
+      state.clips,
+      state.suggestedOrder,
+      state.musicUrl,
+      state.assembledVideoUrl,
+      audioReadyFor,
+      triggerReassembly,
+    ],
   )
 
   // Manual drag-reorder of the timeline. If the project already has an
